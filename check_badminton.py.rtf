@@ -1,0 +1,96 @@
+{\rtf1\ansi\ansicpg932\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 import os\
+import smtplib\
+from email.mime.text import MIMEText\
+import asyncio\
+from playwright.async_api import async_playwright\
+\
+# --- \uc0\u35373 \u23450 \u12456 \u12522 \u12450  ---\
+RECIPIENT_EMAIL = "badmintonkingdom@icloud.com"\
+SENDER_EMAIL = "badmintonkingdom@icloud.com"\
+\
+async def run():\
+    async with async_playwright() as p:\
+        browser = await p.chromium.launch(headless=True)\
+        context = await browser.new_context()\
+        page = await context.new_page()\
+        found_vacancies = []\
+\
+        async def check_current_page(facility_name):\
+            # 1. \uc0\u26376 \u21517 \u12398 \u21462 \u24471 \u65288 \u12459 \u12524 \u12531 \u12480 \u12540 \u19978 \u37096 \u12398 \u38738 \u12356 \u12496 \u12540 \u12395 \u12354 \u12427 \u26085 \u20184 \u12434 \u25506 \u12377 \u65289 \
+            # \uc0\u12373 \u12356 \u12383 \u12414 \u24066 \u12398 \u12471 \u12473 \u12486 \u12512 \u12395 \u21512 \u12431 \u12379 \u12390 \u12475 \u12524 \u12463 \u12479 \u12434 \u24375 \u21270 \
+            month_label = page.locator("td.cal_month, .cal_month_area")\
+            month_text = "\uc0\u19981 \u26126 \u12394 \u26376 "\
+            if await month_label.count() > 0:\
+                month_text = await month_label.first.inner_text()\
+                month_text = month_text.replace("\\n", "").strip()\
+\
+            # 2. \uc0\u12459 \u12524 \u12531 \u12480 \u12540 \u12398 \u12300 \u34920 \u12301 \u33258 \u20307 \u12434 \u29305 \u23450 \u12377 \u12427 \u65288 \u21491 \u20596 \u12398 \u20961 \u20363 \u12434 \u38500 \u22806 \u12377 \u12427 \u12383 \u12417 \u65289 \
+            # \uc0\u12459 \u12524 \u12531 \u12480 \u12540 \u12399 \u36890 \u24120  'cal_table' \u12392 \u12356 \u12358 \u12463 \u12521 \u12473 \u21517 \u12364 \u12388 \u12356 \u12390 \u12356 \u12414 \u12377 \
+            calendar_table = page.locator("table.cal_table")\
+            \
+            if await calendar_table.count() > 0:\
+                # \uc0\u34920 \u12398 \u20013 \u12395 \u12354 \u12427 \u12300 \u31354 \u12365 \u12301 \u12450 \u12452 \u12467 \u12531 \u12384 \u12369 \u12434 \u12459 \u12454 \u12531 \u12488 \
+                vacant_icons = calendar_table.locator("img[alt*='\uc0\u31354 \u12365 ']")\
+                count = await vacant_icons.count()\
+                \
+                if count > 0:\
+                    found_vacancies.append(f"\uc0\u12304 \{facility_name\}\u12305 \{month_text\}\u12395  \{count\} \u20214 \u12398 \u31354 \u12365 \u12364 \u12354 \u12426 \u12414 \u12377 ")\
+\
+        # --- \uc0\u24033 \u22238 \u12523 \u12540 \u12488 \u65288 \u12372 \u25552 \u20379 \u12356 \u12383 \u12384 \u12356 \u12383 \u25163 \u38918 \u65289  ---\
+        await page.goto("https://saitama.rsv.ws-scs.jp/web/")\
+        await page.get_by_role("link", name="\uc0\u26045 \u35373 \u12398 \u31354 \u12365 \u29366 \u27841 ").click()\
+        await page.get_by_role("link", name="\uc0\u21033 \u29992 \u30446 \u30340 \u12363 \u12425 ").click()\
+        await page.get_by_role("link", name="\uc0\u23627 \u20869 \u12473 \u12509 \u12540 \u12484 ").click()\
+        await page.get_by_role("link", name="\uc0\u12496 \u12489 \u12511 \u12531 \u12488 \u12531 ").click()\
+\
+        # \uc0\u37428 \u35895 \u20844 \u27665 \u39208 \
+        await page.get_by_role("link", name="\uc0\u37428 \u35895 \u20844 \u27665 \u39208 ", exact=True).click()\
+        await page.get_by_role("link", name="\uc0\u37428 \u35895 \u20844 \u27665 \u39208  \u22810 \u30446 \u30340 \u12507 \u12540 \u12523 \u65288 \u65298 \u65296 \u65296 \u20154 \u65289 ", exact=True).click()\
+        for _ in range(4):\
+            await check_current_page("\uc0\u37428 \u35895 \u20844 \u27665 \u39208  \u22810 \u30446 \u30340 \u12507 \u12540 \u12523 ")\
+            await page.get_by_role("link", name="\uc0\u27425 \u12398 \u26376 ").click()\
+            await asyncio.sleep(1) # \uc0\u35501 \u12415 \u36796 \u12415 \u24453 \u12385 \
+\
+        # \uc0\u23736 \u30010 \u20844 \u27665 \u39208 \
+        await page.get_by_role("link", name="\uc0\u12418 \u12393 \u12427 ").click()\
+        await page.get_by_role("link", name="\uc0\u12418 \u12393 \u12427 ").click()\
+        await page.get_by_role("link", name="\uc0\u23736 \u30010 \u20844 \u27665 \u39208 ").click()\
+        for _ in range(4):\
+            await check_current_page("\uc0\u23736 \u30010 \u20844 \u27665 \u39208  \u20307 \u32946 \u39208 ")\
+            await page.get_by_role("link", name="\uc0\u27425 \u12398 \u26376 ").click()\
+            await asyncio.sleep(1)\
+\
+        # 3. \uc0\u12513 \u12540 \u12523 \u36865 \u20449 \
+        if found_vacancies:\
+            report = "\uc0\u20197 \u19979 \u12398 \u31354 \u12365 \u12364 \u35211 \u12388 \u12363 \u12426 \u12414 \u12375 \u12383 \u65306 \\n\\n" + "\\n".join(found_vacancies)\
+            send_email("\uc0\u12304 \u20104 \u32004 \u31354 \u12365 \u36890 \u30693 \u12305 \u20844 \u27665 \u39208 \u12496 \u12489 \u12511 \u12531 \u12488 \u12531 ", report)\
+            print("\uc0\u31354 \u12365 \u12434 \u30330 \u35211 \u65281 \u12513 \u12540 \u12523 \u12434 \u36865 \u12426 \u12414 \u12375 \u12383 \u12290 ")\
+        else:\
+            print("\uc0\u26412 \u29289 \u12398 \u31354 \u12365 \u65288 \u9650 \u12420 \u55357 \u56629 \u65289 \u12399 \u35211 \u12388 \u12363 \u12426 \u12414 \u12379 \u12435 \u12391 \u12375 \u12383 \u12290 ")\
+\
+        await context.close()\
+        await browser.close()\
+\
+def send_email(subject, body):\
+    app_password = os.environ.get("ICLOUD_APP_PASSWORD")\
+    if not app_password: return\
+    msg = MIMEText(body)\
+    msg["Subject"] = subject\
+    msg["From"] = SENDER_EMAIL\
+    msg["To"] = RECIPIENT_EMAIL\
+    try:\
+        with smtplib.SMTP("smtp.mail.me.com", 587) as server:\
+            server.starttls()\
+            server.login(SENDER_EMAIL, app_password)\
+            server.sendmail(SENDER_EMAIL, [RECIPIENT_EMAIL], msg.as_string())\
+    except Exception: pass\
+\
+if __name__ == "__main__":\
+    asyncio.run(run())}
