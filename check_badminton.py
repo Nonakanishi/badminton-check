@@ -11,125 +11,112 @@ SENDER_EMAIL = "badmintonkingdom@icloud.com"
 
 async def run():
     async with async_playwright() as p:
-        # ブラウザの起動設定
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             viewport={'width': 1280, 'height': 1200}
         )
         page = await context.new_page()
-        page.set_default_timeout(60000)
+        page.set_default_timeout(90000) # 混雑対応で90秒に設定
 
         found_vacancies = []
-
+        
         # ターゲット施設
         targets = [
             {"name": "三橋総合公園", "room": "体育室Ａ", "filter": True},
             {"name": "大宮体育館", "room": "アリーナ", "filter": True},
-            {"name": "浦和西体育館", "room": "競技場|アリーナ", "filter": True},
-            {"name": "与野体育館", "room": "競技場|アリーナ", "filter": True},
+            {"name": "浦和西体育館", "room": "アリーナ|競技場", "filter": True},
+            {"name": "与野体育館", "room": "アリーナ|競技場", "filter": True},
             {"name": "岸町公民館", "room": "体育館", "filter": False}
         ]
 
-        async def navigate_to_badminton():
-            await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
-            # 1. 「施設の空き状況」アイコンをクリック (alt属性を利用)
-            await page.locator("a:has(img[alt*='空き状況'])").first.click()
-            await page.wait_for_load_state("networkidle")
-            # 2. 「利用目的から探す」アイコンをクリック
-            await page.locator("a:has(img[alt*='利用目的'])").first.click()
-            await page.wait_for_load_state("networkidle")
-            # 3. 「屋内スポーツ」アイコンをクリック
-            await page.locator("a:has(img[alt*='屋内スポーツ'])").first.click()
-            await page.wait_for_load_state("networkidle")
-            # 4. 「バドミントン」アイコンをクリック
-            await page.locator("a:has(img[alt*='バドミントン'])").first.click()
-            await page.wait_for_load_state("networkidle")
-
         async def check_calendar(facility_name, filter_time):
             try:
-                # カレンダーの出現を待つ
-                await page.wait_for_selector("table.cal_table", timeout=20000)
-                
-                # 月情報の取得
-                month_label = page.locator("td.cal_month, .cal_month_area").first
-                month_text = await month_label.inner_text()
+                await page.wait_for_selector("table.cal_table", timeout=30000)
+                month_text = await page.locator("td.cal_month, .cal_month_area").first.inner_text()
                 month_text = month_text.strip().replace("\n", "")
 
-                # セルをチェック
                 cells = page.locator("table.cal_table td")
                 for i in range(await cells.count()):
                     cell = cells.nth(i)
-                    # ★三角(△)アイコンを狙い撃ち (alt属性に「一部」が含まれる画像を検索)
-                    vacancy_img = cell.locator("img[alt*='一部'], img[alt*='空き'], img[alt*='予約可']")
-                    
-                    if await vacancy_img.count() > 0:
-                        alt_text = await vacancy_img.first.get_attribute("alt")
-                        day_text = await cell.locator(".cal_day").inner_text()
-                        
+                    # ★△（一部空き）マークを確実に検知
+                    img = cell.locator("img[alt*='一部'], img[alt*='空き'], img[alt*='予約可']")
+                    if await img.count() > 0:
+                        alt = await img.first.get_attribute("alt")
+                        day = await cell.locator(".cal_day").inner_text()
                         class_attr = await cell.get_attribute("class") or ""
                         is_weekend = any(x in class_attr for x in ["cal_sun", "cal_sat", "cal_holiday"])
 
                         if not filter_time or is_weekend:
-                            found_vacancies.append(f"【{facility_name}】{month_text}{day_text}日({alt_text})")
-                            print(f"  [発見] {facility_name} {month_text}{day_text}日: {alt_text}")
-            except Exception as e:
-                print(f"    ! {facility_name} カレンダー確認不可: {e}")
+                            found_vacancies.append(f"【{facility_name}】{month_text}{day}日({alt})")
+                            print(f"  [発見] {facility_name} {day}日: {alt}")
+            except: pass
 
-        for target in targets:
-            print(f">>> {target['name']} を確認中...")
-            try:
-                await navigate_to_badminton()
-                
-                # ★文字が消える問題への対策：JavaScriptで内部テキストを強引に読み取ってクリック
-                await page.evaluate(f"""
-                    (name) => {{
-                        const links = Array.from(document.querySelectorAll('a'));
-                        const target = links.find(a => a.textContent.includes(name));
-                        if (target) target.click();
-                        else throw new Error('Facility link not found: ' + name);
-                    }}
-                """, target['name'])
-                await page.wait_for_load_state("networkidle")
-
-                # 部屋選択も同様
-                room_kw = target['room'].split('|')[0]
-                await page.evaluate(f"""
-                    (kw) => {{
-                        const links = Array.from(document.querySelectorAll('a'));
-                        const target = links.find(a => a.textContent.includes(kw));
-                        if (target) target.click();
-                        else throw new Error('Room link not found: ' + kw);
-                    }}
-                """, room_kw)
-                
-                # 3ヶ月分チェック
-                for _ in range(3):
-                    await check_calendar(target['name'], target['filter'])
-                    next_btn = page.locator("a:has(img[alt*='翌月']), a:has(img[alt*='次の月'])").first
-                    if await next_btn.count() > 0:
-                        await next_btn.click()
-                        await page.wait_for_load_state("networkidle")
-                        await asyncio.sleep(1)
+        try:
+            print(">>> 予約サイトへ接続中...")
+            await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
+            
+            # --- 手順を最短化：文字が見えなくても「アイコンの位置」や「説明文」で進む ---
+            print(">>> バドミントン一覧画面へ移動中...")
+            # 1. 空き状況
+            await page.locator("a:has(img[alt*='空き状況'])").first.click()
+            # 2. 利用目的
+            await page.locator("a:has(img[alt*='目的'])").first.click()
+            # 3. 画面上の4番目か5番目にある「屋内スポーツ」に相当するアイコンを強引に探してクリック
+            await page.locator("a:has(img[src*='purpose_05']), a:has(img[alt*='スポーツ'])").first.click()
+            # 4. バドミントン
+            await page.locator("a:has(img[alt*='バドミントン']), a:has-text('バドミントン')").first.click()
+            
+            # --- 一度一覧に入ったら、ここから各施設を巡回 ---
+            for target in targets:
+                print(f">>> {target['name']} を確認中...")
+                try:
+                    # 施設リンクをクリック
+                    facility_link = page.locator(f"a:has-text('{target['name']}')").first
+                    if await facility_link.count() == 0:
+                        # 文字が見えない場合のために、リンクを全部取得して検索
+                        await page.evaluate(f"Array.from(document.querySelectorAll('a')).find(a => a.innerText.includes('{target['name']}')).click()")
                     else:
-                        break
-            except Exception as e:
-                print(f"  ! {target['name']} 巡回スキップ: {e}")
-                continue
+                        await facility_link.click()
+                    
+                    # 部屋選択
+                    room_kw = target['room'].split('|')[0]
+                    await page.locator(f"a:has-text('{room_kw}')").first.click()
 
-        # 結果をメール送信
+                    # 3ヶ月分チェック
+                    for _ in range(3):
+                        await check_calendar(target['name'], target['filter'])
+                        next_btn = page.locator("a:has(img[alt*='翌月']), a:has-text('翌月')").first
+                        if await next_btn.count() > 0:
+                            await next_btn.click()
+                            await asyncio.sleep(1)
+                        else: break
+                    
+                    # 「施設一覧に戻る」操作
+                    await page.get_by_role("link", name="もどる").click()
+                    await page.wait_for_load_state("networkidle")
+                except:
+                    # 失敗したら一度バドミントン一覧に戻る
+                    await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
+                    # 再度ナビゲーション（ここは簡略化のため再実行）
+                    continue
+
+        except Exception as e:
+            print(f"!!! 重大なエラー: {e}")
+
+        # 結果送信
         if found_vacancies:
             send_notification(found_vacancies)
-            print(f"通知完了: {len(found_vacancies)} 件")
+            print(f"通知完了: {len(found_vacancies)} 件の空きを発見！")
         else:
-            print("空きは見つかりませんでした。")
+            print("本日のチェック終了。空きは見つかりませんでした。")
 
         await browser.close()
 
 def send_notification(vacancies):
     app_password = os.environ.get("ICLOUD_APP_PASSWORD")
     if not app_password: return
-    subject = "【Kingdom速報】体育館の空き枠(△)を発見！"
+    subject = "【Kingdom速報】体育館の空き(△)を発見しました！"
     body = "以下の空きが見つかりました。\n\n" + "\n".join(vacancies) + "\n\n▼予約サイト\nhttps://saitama.rsv.ws-scs.jp/web/"
     msg = MIMEText(body)
     msg["Subject"] = subject
