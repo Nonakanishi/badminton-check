@@ -11,43 +11,44 @@ SENDER_EMAIL = "badmintonkingdom@icloud.com"
 
 async def run():
     async with async_playwright() as p:
-        # ★PC版のブラウザとして起動
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 1000}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            viewport={'width': 1280, 'height': 1200}
         )
         page = await context.new_page()
         page.set_default_timeout(60000)
 
         found_vacancies = []
         
-        # 施設リスト：スクリーンショットの正確な表記に合わせました
+        # --- 巡回対象の体育館リスト（岩槻文化公園を削除済み） ---
         targets = [
-            {"name": "三橋総合公園", "room": "体育室Ａ１／４|体育室Ａ", "filter": True},
-            {"name": "大宮体育館", "room": "アリーナ１単位|アリーナ１", "filter": True},
-            {"name": "浦和西体育館", "room": "アリーナ|競技場", "filter": True},
-            {"name": "与野体育館", "room": "アリーナ|競技場", "filter": True},
-            {"name": "岸町公民館", "room": "体育館", "filter": False}
+            {"name": "三橋総合公園", "room": "体育室Ａ", "filter": True},
+            {"name": "大宮体育館", "room": "アリーナ", "filter": True},
+            {"name": "浦和西体育館", "room": "競技場|アリーナ", "filter": True},
+            {"name": "与野体育館", "room": "競技場|アリーナ", "filter": True},
+            {"name": "岸町公民館", "room": "体育館", "filter": False},
+            {"name": "鈴谷公民館", "room": "多目的", "filter": False},
+            {"name": "浦和駒場体育館", "room": "競技場|第", "filter": True},
+            {"name": "サイデン化学アリーナ", "room": "サブアリーナ|アリーナ", "filter": True}
         ]
 
         async def check_calendar(facility_name, filter_time):
-            # カレンダーの表（cal_table）が出るまで粘り強く待つ
             try:
-                await page.wait_for_selector("table.cal_table", timeout=30000)
-                await asyncio.sleep(2) # アイコンの描画待ち
+                await page.wait_for_selector("table.cal_table", timeout=20000)
+                await asyncio.sleep(2)
             except:
-                print(f"  ! {facility_name}: カレンダーの表が見つかりません。")
+                print(f"    ! {facility_name}: カレンダーが表示されませんでした。")
                 return
 
-            month_text = await page.locator("td.cal_month, .cal_month_area").first.inner_text()
+            labels = page.locator("td.cal_month, .cal_month_area")
+            month_text = await labels.first.inner_text() if await labels.count() > 0 else "不明な月"
             month_text = month_text.strip().replace("\n", "")
 
-            # すべてのセルをチェック
             cells = page.locator("table.cal_table td")
             for i in range(await cells.count()):
                 cell = cells.nth(i)
-                # ★三角マーク(一部空き)と丸マーク(空き)の両方をチェック
+                # △(一部空き)や○(空き)を検知
                 img = cell.locator("img[alt*='一部'], img[alt*='空き'], img[alt*='予約可']")
                 if await img.count() > 0:
                     alt = await img.first.get_attribute("alt")
@@ -58,28 +59,33 @@ async def run():
 
                     if not filter_time or is_weekend:
                         found_vacancies.append(f"【{facility_name}】{month_text}{day}日({alt})")
-                        print(f"  [発見] {day}日: {alt}")
+                        print(f"  [発見] {facility_name} {day}日: {alt}")
 
-        # 巡回
         for target in targets:
             print(f">>> {target['name']} を確認中...")
             try:
                 await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
                 
-                # PC版のメニュー遷移
                 for step in ["施設の空き状況", "利用目的から", "屋内スポーツ", "バドミントン"]:
                     await page.get_by_role("link", name=step).click(force=True)
                     await asyncio.sleep(1)
 
-                # 施設選択
                 await page.get_by_role("link", name=re.compile(target['name'])).first.click(force=True)
-                await asyncio.sleep(1)
+                await asyncio.sleep(1.2)
                 
-                # 部屋選択（ここを正確に）
-                room_kw = target['room'].split('|')[0]
-                await page.locator(f"a:has-text('{room_kw}')").first.click(force=True)
+                keywords = target['room'].split('|')
+                found_room = False
+                for kw in keywords:
+                    room_link = page.locator(f"a:has-text('{kw}')").first
+                    if await room_link.count() > 0:
+                        await room_link.click(force=True)
+                        found_room = True
+                        break
                 
-                # 今月〜3ヶ月分をチェック
+                if not found_room:
+                    print(f"    ! 部屋名 '{target['room']}' が見つかりませんでした。")
+                    continue
+
                 for _ in range(3):
                     await check_calendar(target['name'], target['filter'])
                     next_btn = page.get_by_role("link", name=re.compile("翌月|次の月"))
@@ -89,26 +95,22 @@ async def run():
                     else:
                         break
             except Exception as e:
-                print(f"  ! {target['name']} でエラー: {e}")
-                # エラー時の画面を保存
-                await page.screenshot(path=f"error_{target['name']}.png")
+                print(f"    ! {target['name']} の巡回中にエラー: {e}")
                 continue
 
-        # 最終結果の通知
         if found_vacancies:
             send_notification(found_vacancies)
-            print(f"通知完了: {len(found_vacancies)} 件の空きを発見！")
+            print(f"通知完了: {len(found_vacancies)} 件の空きを Kingdom へ報告しました。")
         else:
-            print("空きは見つかりませんでした。現在の画面をデバッグ用に保存します。")
-            await page.screenshot(path="final_view.png")
+            print("条件に合う空きは見つかりませんでした。")
 
         await browser.close()
 
 def send_notification(vacancies):
     app_password = os.environ.get("ICLOUD_APP_PASSWORD")
     if not app_password: return
-    subject = "【Kingdom速報】体育館の空き（△）を発見しました！"
-    body = "以下の空き枠が見つかりました。\n\n" + "\n".join(vacancies) + "\n\n▼予約サイト\nhttps://saitama.rsv.ws-scs.jp/web/"
+    subject = "【Kingdom速報】体育館の空き(△)を発見しました！"
+    body = "スクールのレッスン枠確保にご活用ください。\n\n" + "\n".join(vacancies) + "\n\n▼予約サイト\nhttps://saitama.rsv.ws-scs.jp/web/"
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = SENDER_EMAIL
