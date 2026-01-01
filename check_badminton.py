@@ -1,8 +1,6 @@
 import os
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.image import MIMEImage
 import asyncio
 import re
 from playwright.async_api import async_playwright
@@ -13,6 +11,7 @@ SENDER_EMAIL = "badmintonkingdom@icloud.com"
 
 async def run():
     async with async_playwright() as p:
+        # ブラウザの起動設定
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -22,103 +21,120 @@ async def run():
         page.set_default_timeout(60000)
 
         found_vacancies = []
-        debug_images = []
 
-        # 巡回対象：三橋の部屋名をスクリーンショット通りに修正
+        # ターゲット施設
         targets = [
-            {"name": "三橋総合公園", "room": "体育室Ａ", "filter": True}, # 「Ａ」で部分一致
+            {"name": "三橋総合公園", "room": "体育室Ａ", "filter": True},
             {"name": "大宮体育館", "room": "アリーナ", "filter": True},
             {"name": "浦和西体育館", "room": "競技場|アリーナ", "filter": True},
-            {"name": "与野体育館", "room": "競技場|アリーナ", "filter": True}
+            {"name": "与野体育館", "room": "競技場|アリーナ", "filter": True},
+            {"name": "岸町公民館", "room": "体育館", "filter": False}
         ]
 
-        async def save_debug(name):
-            path = f"debug_{name}.png"
-            await page.screenshot(path=path)
-            debug_images.append(path)
+        async def navigate_to_badminton():
+            await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
+            # 1. 「施設の空き状況」アイコンをクリック (alt属性を利用)
+            await page.locator("a:has(img[alt*='空き状況'])").first.click()
+            await page.wait_for_load_state("networkidle")
+            # 2. 「利用目的から探す」アイコンをクリック
+            await page.locator("a:has(img[alt*='利用目的'])").first.click()
+            await page.wait_for_load_state("networkidle")
+            # 3. 「屋内スポーツ」アイコンをクリック
+            await page.locator("a:has(img[alt*='屋内スポーツ'])").first.click()
+            await page.wait_for_load_state("networkidle")
+            # 4. 「バドミントン」アイコンをクリック
+            await page.locator("a:has(img[alt*='バドミントン'])").first.click()
+            await page.wait_for_load_state("networkidle")
+
+        async def check_calendar(facility_name, filter_time):
+            try:
+                # カレンダーの出現を待つ
+                await page.wait_for_selector("table.cal_table", timeout=20000)
+                
+                # 月情報の取得
+                month_label = page.locator("td.cal_month, .cal_month_area").first
+                month_text = await month_label.inner_text()
+                month_text = month_text.strip().replace("\n", "")
+
+                # セルをチェック
+                cells = page.locator("table.cal_table td")
+                for i in range(await cells.count()):
+                    cell = cells.nth(i)
+                    # ★三角(△)アイコンを狙い撃ち (alt属性に「一部」が含まれる画像を検索)
+                    vacancy_img = cell.locator("img[alt*='一部'], img[alt*='空き'], img[alt*='予約可']")
+                    
+                    if await vacancy_img.count() > 0:
+                        alt_text = await vacancy_img.first.get_attribute("alt")
+                        day_text = await cell.locator(".cal_day").inner_text()
+                        
+                        class_attr = await cell.get_attribute("class") or ""
+                        is_weekend = any(x in class_attr for x in ["cal_sun", "cal_sat", "cal_holiday"])
+
+                        if not filter_time or is_weekend:
+                            found_vacancies.append(f"【{facility_name}】{month_text}{day_text}日({alt_text})")
+                            print(f"  [発見] {facility_name} {month_text}{day_text}日: {alt_text}")
+            except Exception as e:
+                print(f"    ! {facility_name} カレンダー確認不可: {e}")
 
         for target in targets:
-            print(f">>> {target['name']} をチェック中...")
+            print(f">>> {target['name']} を確認中...")
             try:
-                # 1. トップページを開く
-                await page.goto("https://saitama.rsv.ws-scs.jp/web/", wait_until="networkidle")
+                await navigate_to_badminton()
                 
-                # 2. 「施設の空き状況」をクリック（画像や文字など複数の方法で試行）
-                # さいたま市のシステムは画像ボタンのため、alt属性やテキストで柔軟に探す
-                vacancy_btn = page.locator("a:has(img[alt*='空き状況']), a:has-text('施設の空き状況')").first
-                await vacancy_btn.click(force=True)
-                await asyncio.sleep(2)
+                # ★文字が消える問題への対策：JavaScriptで内部テキストを強引に読み取ってクリック
+                await page.evaluate(f"""
+                    (name) => {{
+                        const links = Array.from(document.querySelectorAll('a'));
+                        const target = links.find(a => a.textContent.includes(name));
+                        if (target) target.click();
+                        else throw new Error('Facility link not found: ' + name);
+                    }}
+                """, target['name'])
+                await page.wait_for_load_state("networkidle")
 
-                # 3. 「利用目的から探す」をクリック
-                purpose_btn = page.locator("a:has(img[alt*='利用目的']), a:has-text('利用目的')").first
-                await purpose_btn.click(force=True)
-                await asyncio.sleep(2)
-
-                # 4. 「屋内スポーツ」->「バドミントン」
-                await page.locator("a:has-text('屋内スポーツ')").first.click(force=True)
-                await page.locator("a:has-text('バドミントン')").first.click(force=True)
-
-                # 5. 施設名を選択
-                await page.get_by_role("link", name=re.compile(target['name'])).first.click(force=True)
-                await asyncio.sleep(2)
+                # 部屋選択も同様
+                room_kw = target['room'].split('|')[0]
+                await page.evaluate(f"""
+                    (kw) => {{
+                        const links = Array.from(document.querySelectorAll('a'));
+                        const target = links.find(a => a.textContent.includes(kw));
+                        if (target) target.click();
+                        else throw new Error('Room link not found: ' + kw);
+                    }}
+                """, room_kw)
                 
-                # 6. 部屋選択（「体育室Ａ」を含むリンクをクリック）
-                room_link = page.locator(f"a:has-text('{target['room']}')").first
-                await room_link.click(force=True)
-                
-                # 7. 3ヶ月分をくまなくチェック
+                # 3ヶ月分チェック
                 for _ in range(3):
-                    await page.wait_for_selector("table.cal_table", timeout=20000)
-                    cells = page.locator("table.cal_table td")
-                    for i in range(await cells.count()):
-                        cell = cells.nth(i)
-                        # ★ここが重要：△(一部空き)の緑色アイコンを確実に検知
-                        img = cell.locator("img[alt*='一部'], img[alt*='空き'], img[alt*='予約可']")
-                        if await img.count() > 0:
-                            alt = await img.first.get_attribute("alt")
-                            day = await cell.locator(".cal_day").inner_text()
-                            found_vacancies.append(f"【{target['name']}】{day}日({alt})")
-                            print(f"  [発見] {day}日: {alt}")
-
-                    # 翌月へ
-                    next_btn = page.get_by_role("link", name=re.compile("翌月|次の月"))
+                    await check_calendar(target['name'], target['filter'])
+                    next_btn = page.locator("a:has(img[alt*='翌月']), a:has(img[alt*='次の月'])").first
                     if await next_btn.count() > 0:
-                        await next_btn.click(force=True)
-                        await asyncio.sleep(2)
+                        await next_btn.click()
+                        await page.wait_for_load_state("networkidle")
+                        await asyncio.sleep(1)
                     else:
                         break
-
             except Exception as e:
-                print(f"  ! {target['name']} でエラー: {e}")
-                await save_debug(target['name'])
+                print(f"  ! {target['name']} 巡回スキップ: {e}")
+                continue
 
-        # メール通知
-        if found_vacancies or debug_images:
-            send_notification(found_vacancies, debug_images)
+        # 結果をメール送信
+        if found_vacancies:
+            send_notification(found_vacancies)
+            print(f"通知完了: {len(found_vacancies)} 件")
+        else:
+            print("空きは見つかりませんでした。")
 
         await browser.close()
 
-def send_notification(vacancies, image_paths):
+def send_notification(vacancies):
     app_password = os.environ.get("ICLOUD_APP_PASSWORD")
     if not app_password: return
-    msg = MIMEMultipart()
-    msg["Subject"] = "【Kingdom速報】空き状況・精査報告"
+    subject = "【Kingdom速報】体育館の空き枠(△)を発見！"
+    body = "以下の空きが見つかりました。\n\n" + "\n".join(vacancies) + "\n\n▼予約サイト\nhttps://saitama.rsv.ws-scs.jp/web/"
+    msg = MIMEText(body)
+    msg["Subject"] = subject
     msg["From"] = SENDER_EMAIL
     msg["To"] = RECIPIENT_EMAIL
-    body = "本日のチェック結果です。\n\n"
-    if vacancies:
-        body += "■以下の空き（△含む）が見つかりました：\n" + "\n".join(vacancies) + "\n\n"
-    else:
-        body += "条件に合う空きは見つかりませんでした。\n\n"
-    if image_paths:
-        body += "※一部の操作でエラーが発生したため、画面を添付します。\n"
-    msg.attach(MIMEText(body, "plain"))
-    for path in image_paths:
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                img = MIMEImage(f.read())
-                img.add_header("Content-Disposition", "attachment", filename=path)
-                msg.attach(img)
     try:
         with smtplib.SMTP("smtp.mail.me.com", 587) as server:
             server.starttls()
